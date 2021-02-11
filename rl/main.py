@@ -89,7 +89,8 @@ class SnapShot:
         )
 
     def add_reward(self) -> float:
-        return 1 - abs(self.ball_loc()[0] - self.green_loc()) / 400
+        y, x = self.ball_loc()
+        return 1 - abs(y - self.green_loc()) * abs(x - 140) / 40000
 
     def state(self, action: int) -> State:
         return State(
@@ -126,10 +127,10 @@ class Agent:
         return action
 
     def best_action(self) -> np.array:
-        return np.array(
-           model(torch.Tensor([self.snapshot.state(n).to_feature()]))
+        return np.array([
+           model(torch.Tensor([self.snapshot.state(n).to_feature()])).detach().numpy()
            for n in range(N_ACTIONS)
-        ).argmax()
+        ]).argmax()
 
     def make_x(self) -> torch.Tensor:
         return torch.Tensor([state.to_feature() for state, _ in self.history])
@@ -156,7 +157,7 @@ if __name__ == "__main__":
     img = env.reset()
     model = Network(3, 10)
     agent = Agent(model, snapshot=SnapShot(img), history=[])
-    for n in range(1000):
+    for n in range(10):
         env.reset()
         done = False
         while not done:
@@ -167,6 +168,7 @@ if __name__ == "__main__":
             # 玉の色(R+G+B)   -> 708
             env.render()
             action = agent.select()
+            # action = agent.best_action()
             img, reward, done, info = env.step(action)
             agent.observe(img, reward)
             # print(info)
