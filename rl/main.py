@@ -1,4 +1,5 @@
-from typing import Tuple, NamedTuple, List
+import random
+from typing import Tuple, NamedTuple, List, Optional, Union, Iterable
 import time
 from dataclasses import dataclass
 from itertools import chain
@@ -30,9 +31,11 @@ class State(NamedTuple):
     def len(cls) -> int:
         return len(cls._fields) + N_ACTIONS - 1
 
-    def to_feature(self):
+    def to_feature(self, action: Optional[int] = None) -> List[int]:
         lis = [0] * N_ACTIONS
-        lis[self.action] = 1
+        if action is None:
+            action = self.action
+        lis[action] = 1
         return list(self)[:-1] + lis
 
 
@@ -77,7 +80,9 @@ class SnapShot:
         return (self.snipped_img[:, 16] == 417).argmax()
 
     def green_loc(self) -> int:
-        return (self.snipped_img[:, 140] == 370).argmax()
+        top = (self.snipped_img[:, 140] == 370).argmax()
+        bottom = (self.snipped_img[:, 140] == 370).cumsum().argmax()
+        return np.int64((top + bottom) / 2)
 
     def ball_loc(self) -> Tuple[int, int]:
         arr = self.snipped_img == 708
@@ -143,13 +148,22 @@ class Agent:
            for n in range(N_ACTIONS)
         ]).argmax()
 
-    def make_x(self) -> torch.Tensor:
-        return torch.Tensor([state.to_feature() for state, _ in self.history])
+    def make_x(self, action: Union[None, int, Iterable[int]] = None) -> torch.Tensor:
+        if action is None:
+            action = [None] * len(self.history)
+        if isinstance(action, int):
+            action = [action] * len(self.history)
+        return torch.Tensor([state.to_feature(a) for (state, _), a in zip(self.history, action)])
+
+    def history_best_actions(self) -> torch.Tensor:
+        X = torch.stack([self.make_x(a) for a in range(N_ACTIONS)])
+        return self.model(X).argmax(axis=0)
 
     def _q_target(self) -> torch.Tensor:
-        X = self.make_x()
+        X = self.make_x(self.history_best_actions())
         r = torch.Tensor([[reward] for _, reward in self.history])
-        return r + X * self.gamma
+        with torch.no_grad():
+            return r + self.model(X) * self.gamma
 
     def make_dataset(self) -> TensorDataset:
         return TensorDataset(self.make_x(), self._q_target())
@@ -160,14 +174,15 @@ class Agent:
         train, val = random_split(dataset, [len(dataset) - val_length, val_length])
         trainer = pl.Trainer(max_epochs=1)
         trainer.fit(self.model, DataLoader(train, shuffle=True), DataLoader(val, shuffle=True))
-        self.epsilon *= 0.9
+        self.epsilon *= 0.95
 
 
 if __name__ == "__main__":
-    env = gym.make('Pong-v0')
+    env = gym.make('Pong-v4')
     img = env.reset()
     model = Network(3, 10)
     agent = Agent(model, snapshot=SnapShot(img), history=[])
+    histories = []
     for n in range(100):
         env.reset()
         done = False
@@ -182,9 +197,11 @@ if __name__ == "__main__":
             # action = agent.best_action()
             img, reward, done, info = env.step(action)
             agent.observe(img, reward)
-            # print(info)
+            # print(
+            # .info)
             # print(obs)
             # print(reward)
-        agent.history = agent.history[:len(agent.history) // 2]
+        histories += agent.history
+        agent.history = list(set(agent.history) | set(random.choices(histories, k=1000)))
         agent.update()
         agent.history = []
