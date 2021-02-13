@@ -67,6 +67,7 @@ class Network(pl.LightningModule):
 class SnapShot:
     img: np.array
     pre_loc: Tuple[int, int] = (80, 80)
+    pre_vx: int = -1
 
     @property
     def snipped_img(self) -> np.array:
@@ -88,9 +89,19 @@ class SnapShot:
             self.ball_loc()[1] - self.pre_loc[1]
         )
 
+    def is_end(self) -> bool:
+        return sum(self.ball_velocity()) == 0
+
     def add_reward(self) -> float:
         y, x = self.ball_loc()
-        return 1 - abs(y - self.green_loc()) * abs(x - 140) / 40000
+        if self.is_end():
+            return -1
+        base_score = 100 if (self.pre_vx > 0) & (self.vx < 0) else 1
+        return base_score - abs(y - self.green_loc()) * abs(x - 140) / 40000
+
+    @property
+    def vx(self) -> int:
+        return self.ball_velocity()[1]
 
     def state(self, action: int) -> State:
         return State(
@@ -104,7 +115,7 @@ class SnapShot:
         )
 
     def update(self, img: np.array) -> "SnapShot":
-        return self.__class__(img=img, pre_loc=self.ball_loc())
+        return self.__class__(img=img, pre_loc=self.ball_loc(), pre_vx=self.vx)
 
 
 @dataclass
@@ -147,8 +158,8 @@ class Agent:
         dataset = self.make_dataset()
         val_length = int(len(dataset) * 0.1)
         train, val = random_split(dataset, [len(dataset) - val_length, val_length])
-        trainer = pl.Trainer(max_epochs=3)
-        trainer.fit(self.model, DataLoader(train), DataLoader(val))
+        trainer = pl.Trainer(max_epochs=1)
+        trainer.fit(self.model, DataLoader(train, shuffle=True), DataLoader(val, shuffle=True))
         self.epsilon *= 0.9
 
 
@@ -157,7 +168,7 @@ if __name__ == "__main__":
     img = env.reset()
     model = Network(3, 10)
     agent = Agent(model, snapshot=SnapShot(img), history=[])
-    for n in range(10):
+    for n in range(100):
         env.reset()
         done = False
         while not done:
@@ -174,4 +185,6 @@ if __name__ == "__main__":
             # print(info)
             # print(obs)
             # print(reward)
+        agent.history = agent.history[:len(agent.history) // 2]
         agent.update()
+        agent.history = []
